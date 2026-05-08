@@ -1,0 +1,7 @@
+zig-out/
+zig-cache/
+.zig-cache/
+target/
+dist/
+# Added by goreleaser init:
+.intentionally-empty-file.o
