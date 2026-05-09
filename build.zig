@@ -4,6 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const version = b.option([]const u8, "version", "Version string") orelse "dev";
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", version);
+
     const exe = b.addExecutable(.{
         .name = "agent-hud",
         .root_module = b.createModule(.{
@@ -12,6 +16,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    exe.root_module.addImport("build_options", options.createModule());
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
