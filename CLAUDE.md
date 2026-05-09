@@ -5,12 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-mise install          # install Zig (required before anything else)
+mise install          # install Zig + goreleaser (required before anything else)
 zig build             # dev build → zig-out/bin/agent-hud
 zig build run         # build and run (reads stdin)
+zig build test        # run unit tests
 zig build -Doptimize=ReleaseSafe  # optimised build
-make dry-run          # cross-compile both targets and print the gh release command
-make release          # cross-compile and publish to GitHub (requires an exact git tag)
+make snapshot         # build a local snapshot for the current platform via goreleaser
+make release          # cross-compile all targets and publish to GitHub (requires an exact git tag)
 make clean            # remove dist/, zig-out/, .zig-cache/
 ```
 
@@ -34,13 +35,22 @@ Uses the Zig 0.16 `std.process.Init` main signature so the runtime provides `ini
 
 ## Releases
 
-Cross-compilation uses Zig's built-in cross-compiler — no Docker or extra tooling needed. Release targets: `aarch64-macos` and `x86_64-linux-musl`. Cross builds use `--prefix zig-out/<target>` to avoid overwriting the native dev binary at `zig-out/bin/agent-hud`.
+Releases are managed by [GoReleaser](https://goreleaser.com) using Zig's built-in cross-compiler — no Docker or extra tooling needed.
+
+**Targets:**
+| Target | Platform |
+|---|---|
+| `aarch64-macos` | macOS Apple Silicon |
+| `x86_64-macos` | macOS Intel |
+| `aarch64-linux` | Linux ARM64 (glibc) |
+| `x86_64-linux-musl` | Linux x86_64 (static, musl) |
+| `x86_64-windows` | Windows x86_64 |
 
 Release workflow:
 ```bash
 git tag v0.x.0
 git push origin v0.x.0
-make release   # requires gh auth login
+make release   # requires goreleaser + gh auth login
 ```
 
 ## Claude Code integration

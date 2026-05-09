@@ -3,4 +3,5 @@ experimental = true
 lockfile = true
 
 [tools]
+goreleaser = "2.15.4"
 zig = "latest"
