@@ -39,6 +39,12 @@ fn gitBranch(gpa: std.mem.Allocator, io: std.Io, cwd: []const u8) ?[]const u8 {
     return gpa.dupe(u8, trimmed) catch null;
 }
 
+fn writeStatusLine(writer: *std.Io.Writer, model: []const u8, work_dir: []const u8, branch: []const u8, ctx_pct: f64, session_pct: f64) !void {
+    try writer.print("[{s}] {s} ({s}) | {d:.0}% context | {d:.0}% limit\n", .{
+        model, work_dir, branch, ctx_pct, session_pct,
+    });
+}
+
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
@@ -72,12 +78,59 @@ pub fn main(init: std.process.Init) !void {
 
     var stdout_buf: [256]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buf);
-    try stdout_writer.interface.print("[{s}] {s} ({s}) | {d:.0}% context | {d:.0}% limit\n", .{
-        model,
-        work_dir,
-        branch orelse "?",
-        ctx_pct,
-        session_pct,
-    });
+    try writeStatusLine(&stdout_writer.interface, model, work_dir, branch orelse "?", ctx_pct, session_pct);
     try stdout_writer.interface.flush();
+}
+
+test "writeStatusLine produces correct output" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeStatusLine(&w, "claude-opus-4-7", "agent-hud", "main", 45.0, 30.0);
+    try std.testing.expectEqualStrings(
+        "[claude-opus-4-7] agent-hud (main) | 45% context | 30% limit\n",
+        w.buffered(),
+    );
+}
+
+test "writeStatusLine with all unknowns" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeStatusLine(&w, "?", "?", "?", 0.0, 0.0);
+    try std.testing.expectEqualStrings(
+        "[?] ? (?) | 0% context | 0% limit\n",
+        w.buffered(),
+    );
+}
+
+test "StatusInput parses full JSON payload" {
+    const json =
+        \\{"cwd":"/home/user/agent-hud","model":{"display_name":"claude-opus-4-7"},"context_window":{"used_percentage":45.0},"rate_limits":{"five_hour":{"used_percentage":30.0}}}
+    ;
+    const parsed = try std.json.parseFromSlice(StatusInput, std.testing.allocator, json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    const d = parsed.value;
+    try std.testing.expectEqualStrings("/home/user/agent-hud", d.cwd.?);
+    try std.testing.expectEqualStrings("claude-opus-4-7", d.model.?.display_name.?);
+    try std.testing.expectEqual(45.0, d.context_window.?.used_percentage.?);
+    try std.testing.expectEqual(30.0, d.rate_limits.?.five_hour.?.used_percentage.?);
+}
+
+test "StatusInput with empty JSON gives all-null fields" {
+    const parsed = try std.json.parseFromSlice(StatusInput, std.testing.allocator, "{}", .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    const d = parsed.value;
+    try std.testing.expect(d.cwd == null);
+    try std.testing.expect(d.model == null);
+    try std.testing.expect(d.context_window == null);
+    try std.testing.expect(d.rate_limits == null);
+}
+
+test "StatusInput ignores unknown fields" {
+    const json =
+        \\{"cwd":"/tmp","unknown_key":"ignored","model":{"display_name":"x","extra":99}}
+    ;
+    const parsed = try std.json.parseFromSlice(StatusInput, std.testing.allocator, json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("/tmp", parsed.value.cwd.?);
+    try std.testing.expectEqualStrings("x", parsed.value.model.?.display_name.?);
 }
