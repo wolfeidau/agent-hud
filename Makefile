@@ -14,4 +14,4 @@ clean:
 	rm -rf $(DIST) zig-out zig-cache .zig-cache
 
 test:
-	zig build test
+	zig test src/*.zig 2>&1 | cat

@@ -52,6 +52,18 @@ const StatusInput = struct {
     }
 };
 
+const cyan = "\x1b[36m";
+const green = "\x1b[32m";
+const yellow = "\x1b[33m";
+const red = "\x1b[31m";
+const reset = "\x1b[0m";
+
+fn pctColor(pct: f64) []const u8 {
+    if (pct >= 80.0) return red;
+    if (pct >= 50.0) return yellow;
+    return green;
+}
+
 fn gitBranch(gpa: std.mem.Allocator, io: std.Io, cwd: []const u8) ?[]const u8 {
     const result = std.process.run(gpa, io, .{
         .argv = &.{ "git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD" },
@@ -69,14 +81,17 @@ fn gitBranch(gpa: std.mem.Allocator, io: std.Io, cwd: []const u8) ?[]const u8 {
 }
 
 fn writeStatusLine(writer: *std.Io.Writer, data: StatusInput, branch: []const u8) !void {
+    const ctx = data.ctxPct();
+    try writer.print("{s}[{s}]{s} {s} ({s}{s}{s}) | {s}{d:.0}%{s} context | ", .{
+        cyan, data.modelName(), reset,
+        data.workDir(),
+        yellow, branch, reset,
+        pctColor(ctx), ctx, reset,
+    });
     if (data.sessionPct()) |pct| {
-        try writer.print("[{s}] {s} ({s}) | {d:.0}% context | {d:.0}% limit\n", .{
-            data.modelName(), data.workDir(), branch, data.ctxPct(), pct,
-        });
+        try writer.print("{s}{d:.0}%{s} limit\n", .{ pctColor(pct), pct, reset });
     } else {
-        try writer.print("[{s}] {s} ({s}) | {d:.0}% context | ${d:.2}\n", .{
-            data.modelName(), data.workDir(), branch, data.ctxPct(), data.costUsd(),
-        });
+        try writer.print("${d:.2}\n", .{data.costUsd()});
     }
 }
 
@@ -119,7 +134,7 @@ test "writeStatusLine subscriber shows rate limit" {
     };
     try writeStatusLine(&w, data, "main");
     try std.testing.expectEqualStrings(
-        "[claude-opus-4-7] agent-hud (main) | 45% context | 30% limit\n",
+        "\x1b[36m[claude-opus-4-7]\x1b[0m agent-hud (\x1b[33mmain\x1b[0m) | \x1b[32m45%\x1b[0m context | \x1b[32m30%\x1b[0m limit\n",
         w.buffered(),
     );
 }
@@ -135,7 +150,7 @@ test "writeStatusLine team/enterprise shows cost" {
     };
     try writeStatusLine(&w, data, "main");
     try std.testing.expectEqualStrings(
-        "[claude-opus-4-7] agent-hud (main) | 45% context | $1.23\n",
+        "\x1b[36m[claude-opus-4-7]\x1b[0m agent-hud (\x1b[33mmain\x1b[0m) | \x1b[32m45%\x1b[0m context | $1.23\n",
         w.buffered(),
     );
 }
@@ -145,7 +160,7 @@ test "writeStatusLine all unknowns shows cost zero" {
     var w = std.Io.Writer.fixed(&buf);
     try writeStatusLine(&w, .{}, "?");
     try std.testing.expectEqualStrings(
-        "[?] ? (?) | 0% context | $0.00\n",
+        "\x1b[36m[?]\x1b[0m ? (\x1b[33m?\x1b[0m) | \x1b[32m0%\x1b[0m context | $0.00\n",
         w.buffered(),
     );
 }
