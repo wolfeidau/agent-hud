@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 const RateLimit = struct {
     used_percentage: ?f64 = null,
@@ -98,6 +99,19 @@ fn writeStatusLine(writer: *std.Io.Writer, data: StatusInput, branch: []const u8
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
+
+    var arg_it = try init.minimal.args.iterateAllocator(gpa);
+    defer arg_it.deinit();
+    _ = arg_it.next();
+    while (arg_it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) {
+            var buf: [64]u8 = undefined;
+            var w = std.Io.File.stdout().writer(io, &buf);
+            try w.interface.print("{s}\n", .{build_options.version});
+            try w.interface.flush();
+            return;
+        }
+    }
 
     var stdin_buf: [4096]u8 = undefined;
     var stdin_reader = std.Io.File.stdin().reader(io, &stdin_buf);
