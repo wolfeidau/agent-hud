@@ -1,0 +1,17 @@
+image: "buildkite/hosted-agent-base-images:ubuntu-jammy"
+
+steps:
+    - label: ":zig: test"
+      id: test
+      commands:
+        - make test
+      plugins:
+        - mise#v1.1.1: ~
+
+    - label: ":zig: build"
+      id: snapshot
+      depends_on: test
+      commands:
+        - make snapshot
+      plugins:
+        - mise#v1.1.1: ~
