@@ -16,11 +16,40 @@ const Model = struct {
     display_name: ?[]const u8 = null,
 };
 
+const Cost = struct {
+    total_cost_usd: ?f64 = null,
+};
+
 const StatusInput = struct {
     cwd: ?[]const u8 = null,
     model: ?Model = null,
     context_window: ?ContextWindow = null,
     rate_limits: ?RateLimits = null,
+    cost: ?Cost = null,
+
+    fn modelName(self: StatusInput) []const u8 {
+        return if (self.model) |m| m.display_name orelse "?" else "?";
+    }
+
+    fn workDir(self: StatusInput) []const u8 {
+        const cwd = self.cwd orelse return "?";
+        return if (cwd.len > 0) std.fs.path.basename(cwd) else "?";
+    }
+
+    fn ctxPct(self: StatusInput) f64 {
+        return if (self.context_window) |cw| cw.used_percentage orelse 0.0 else 0.0;
+    }
+
+    fn sessionPct(self: StatusInput) ?f64 {
+        return if (self.rate_limits) |rl|
+            if (rl.five_hour) |fh| fh.used_percentage else null
+        else
+            null;
+    }
+
+    fn costUsd(self: StatusInput) f64 {
+        return if (self.cost) |c| c.total_cost_usd orelse 0.0 else 0.0;
+    }
 };
 
 fn gitBranch(gpa: std.mem.Allocator, io: std.Io, cwd: []const u8) ?[]const u8 {
@@ -39,10 +68,16 @@ fn gitBranch(gpa: std.mem.Allocator, io: std.Io, cwd: []const u8) ?[]const u8 {
     return gpa.dupe(u8, trimmed) catch null;
 }
 
-fn writeStatusLine(writer: *std.Io.Writer, model: []const u8, work_dir: []const u8, branch: []const u8, ctx_pct: f64, session_pct: f64) !void {
-    try writer.print("[{s}] {s} ({s}) | {d:.0}% context | {d:.0}% limit\n", .{
-        model, work_dir, branch, ctx_pct, session_pct,
-    });
+fn writeStatusLine(writer: *std.Io.Writer, data: StatusInput, branch: []const u8) !void {
+    if (data.sessionPct()) |pct| {
+        try writer.print("[{s}] {s} ({s}) | {d:.0}% context | {d:.0}% limit\n", .{
+            data.modelName(), data.workDir(), branch, data.ctxPct(), pct,
+        });
+    } else {
+        try writer.print("[{s}] {s} ({s}) | {d:.0}% context | ${d:.2}\n", .{
+            data.modelName(), data.workDir(), branch, data.ctxPct(), data.costUsd(),
+        });
+    }
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -63,48 +98,85 @@ pub fn main(init: std.process.Init) !void {
     defer if (parsed) |p| p.deinit();
     const data: StatusInput = if (parsed) |p| p.value else .{};
 
-    const model = if (data.model) |m| m.display_name orelse "?" else "?";
-    const cwd = data.cwd orelse "";
-    const work_dir = if (cwd.len > 0) std.fs.path.basename(cwd) else "?";
-
-    const ctx_pct: f64 = if (data.context_window) |cw| cw.used_percentage orelse 0.0 else 0.0;
-    const session_pct: f64 = if (data.rate_limits) |rl|
-        if (rl.five_hour) |fh| fh.used_percentage orelse 0.0 else 0.0
-    else
-        0.0;
-
-    const branch = gitBranch(gpa, io, cwd);
+    const branch = gitBranch(gpa, io, data.cwd orelse "");
     defer if (branch) |b| gpa.free(b);
 
     var stdout_buf: [256]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buf);
-    try writeStatusLine(&stdout_writer.interface, model, work_dir, branch orelse "?", ctx_pct, session_pct);
+    try writeStatusLine(&stdout_writer.interface, data, branch orelse "?");
     try stdout_writer.interface.flush();
 }
 
-test "writeStatusLine produces correct output" {
+test "writeStatusLine subscriber shows rate limit" {
     var buf: [256]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    try writeStatusLine(&w, "claude-opus-4-7", "agent-hud", "main", 45.0, 30.0);
+    const data = StatusInput{
+        .model = .{ .display_name = "claude-opus-4-7" },
+        .cwd = "/home/user/agent-hud",
+        .context_window = .{ .used_percentage = 45.0 },
+        .rate_limits = .{ .five_hour = .{ .used_percentage = 30.0 } },
+        .cost = .{ .total_cost_usd = 1.23 },
+    };
+    try writeStatusLine(&w, data, "main");
     try std.testing.expectEqualStrings(
         "[claude-opus-4-7] agent-hud (main) | 45% context | 30% limit\n",
         w.buffered(),
     );
 }
 
-test "writeStatusLine with all unknowns" {
+test "writeStatusLine team/enterprise shows cost" {
     var buf: [256]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    try writeStatusLine(&w, "?", "?", "?", 0.0, 0.0);
+    const data = StatusInput{
+        .model = .{ .display_name = "claude-opus-4-7" },
+        .cwd = "/home/user/agent-hud",
+        .context_window = .{ .used_percentage = 45.0 },
+        .cost = .{ .total_cost_usd = 1.23 },
+    };
+    try writeStatusLine(&w, data, "main");
     try std.testing.expectEqualStrings(
-        "[?] ? (?) | 0% context | 0% limit\n",
+        "[claude-opus-4-7] agent-hud (main) | 45% context | $1.23\n",
         w.buffered(),
     );
 }
 
+test "writeStatusLine all unknowns shows cost zero" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeStatusLine(&w, .{}, "?");
+    try std.testing.expectEqualStrings(
+        "[?] ? (?) | 0% context | $0.00\n",
+        w.buffered(),
+    );
+}
+
+test "StatusInput methods derive correct values" {
+    const data = StatusInput{
+        .model = .{ .display_name = "Opus" },
+        .cwd = "/home/user/agent-hud",
+        .context_window = .{ .used_percentage = 50.0 },
+        .rate_limits = .{ .five_hour = .{ .used_percentage = 20.0 } },
+        .cost = .{ .total_cost_usd = 0.42 },
+    };
+    try std.testing.expectEqualStrings("Opus", data.modelName());
+    try std.testing.expectEqualStrings("agent-hud", data.workDir());
+    try std.testing.expectEqual(50.0, data.ctxPct());
+    try std.testing.expectEqual(20.0, data.sessionPct().?);
+    try std.testing.expectEqual(0.42, data.costUsd());
+}
+
+test "StatusInput methods handle missing fields" {
+    const data = StatusInput{};
+    try std.testing.expectEqualStrings("?", data.modelName());
+    try std.testing.expectEqualStrings("?", data.workDir());
+    try std.testing.expectEqual(0.0, data.ctxPct());
+    try std.testing.expect(data.sessionPct() == null);
+    try std.testing.expectEqual(0.0, data.costUsd());
+}
+
 test "StatusInput parses full JSON payload" {
     const json =
-        \\{"cwd":"/home/user/agent-hud","model":{"display_name":"claude-opus-4-7"},"context_window":{"used_percentage":45.0},"rate_limits":{"five_hour":{"used_percentage":30.0}}}
+        \\{"cwd":"/home/user/agent-hud","model":{"display_name":"claude-opus-4-7"},"context_window":{"used_percentage":45.0},"rate_limits":{"five_hour":{"used_percentage":30.0}},"cost":{"total_cost_usd":1.23}}
     ;
     const parsed = try std.json.parseFromSlice(StatusInput, std.testing.allocator, json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
@@ -113,6 +185,7 @@ test "StatusInput parses full JSON payload" {
     try std.testing.expectEqualStrings("claude-opus-4-7", d.model.?.display_name.?);
     try std.testing.expectEqual(45.0, d.context_window.?.used_percentage.?);
     try std.testing.expectEqual(30.0, d.rate_limits.?.five_hour.?.used_percentage.?);
+    try std.testing.expectEqual(1.23, d.cost.?.total_cost_usd.?);
 }
 
 test "StatusInput with empty JSON gives all-null fields" {
@@ -123,6 +196,7 @@ test "StatusInput with empty JSON gives all-null fields" {
     try std.testing.expect(d.model == null);
     try std.testing.expect(d.context_window == null);
     try std.testing.expect(d.rate_limits == null);
+    try std.testing.expect(d.cost == null);
 }
 
 test "StatusInput ignores unknown fields" {
